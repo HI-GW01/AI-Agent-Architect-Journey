@@ -73,7 +73,7 @@ class ScaledDotProductAttention(nn.Module):
         return output, attn_weights
 
 # 사용
-sentence = "The cat said fuck you"
+sentence = "The cat said we can do everything"
 tokens = sentence.split()   #단어 별로 나누기
 
 
