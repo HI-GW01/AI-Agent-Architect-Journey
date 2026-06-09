@@ -46,32 +46,150 @@ class PositionalEncoding(nn.Module):
 class ScaledDotProductAttention(nn.Module):
     def __init__(self, d_model=512):
         super().__init__()
+
+    def forward(self, Q, K, V, mask=None):
+        d_k = Q.size(-1)
+
+        scores = torch.matmul(Q, K.transpose(-2,-1)) / math.sqrt(d_k)
+
+        # 마스크가 있으면 막을 위치를 -무한대로 (softmax 통과하면 0이 됨)
+        if mask is not None:
+            scores = scores.masked_fill(mask, float('-inf'))
+
+        attn_weights = F.softmax(scores, dim=-1)
+
+        output = torch.matmul(attn_weights, V)  
+        return output, attn_weights
+
+
+class MultiHeadAttention(nn.Module):
+    def __init__(self, d_model=512, h=8):
+        super().__init__()
+        self.h = h
+        self.d_k = d_model // h  # 512 // 8 = 64
+
+        # 작은 행렬 h개를 쌓은 것과 동일한 큰 행렬 하나씩
         self.W_q = nn.Linear(d_model, d_model)
         self.W_k = nn.Linear(d_model, d_model)
         self.W_v = nn.Linear(d_model, d_model)
+        self.W_o = nn.Linear(d_model, d_model)  # concat 후 최종 투영
 
-    def scaled_dot_product(self, Q, K, V):
-        d_k = Q.size(-1)  # 나중에 d_k가 바뀌어도 자동 반영
-        
-        # Q · Kᵀ / √d_k
-        scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(d_k)  # [seq_len, seq_len]
-        
-        # 소프트맥스로 확률 변환 (마지막 차원 기준)
-        attn_weights = F.softmax(scores, dim=-1)  # [seq_len, seq_len]
-        
-        # 어텐션 가중치 × V
-        output = torch.matmul(attn_weights, V)  # [seq_len, d_model]
-        
-        return output, attn_weights
+        self.attention = ScaledDotProductAttention()
+
+    def forward(self, query, key, value, mask=False):
+        seq_len = query.size(0)
+
+        # 1) 투영: [seq, 512]
+        Q = self.W_q(query)
+        K = self.W_k(key)
+        V = self.W_v(value)
+
+        # 2) 헤드로 split: [seq, 512] -> [seq, h, d_k] -> [h, seq, d_k]
+        Q = Q.view(seq_len, self.h, self.d_k).permute(1, 0, 2)
+        K = K.view(seq_len, self.h, self.d_k).permute(1, 0, 2)
+        V = V.view(seq_len, self.h, self.d_k).permute(1, 0, 2)
+
+        # 3) 마스크 체크 시: 미래 위치(상삼각)를 막는 마스크 생성
+        causal_mask = None
+        if mask:
+            causal_mask = torch.triu(torch.ones(seq_len, seq_len), diagonal=1).bool()
+
+        # 4) attention: [h, seq, d_k]
+        out, attn_weights = self.attention(Q, K, V, causal_mask)
+
+        # 5) concat: [h, seq, d_k] -> [seq, h, d_k] -> [seq, 512]
+        out = out.permute(1, 0, 2).reshape(seq_len, self.h * self.d_k)
+
+        # 6) 최종 투영 W_o
+        out = self.W_o(out)
+        return out, attn_weights
+    
+class FeedForward(nn.Module):
+    def __init__(self, d_model=512, d_ff=2048):
+        super().__init__()
+        self.W1 = nn.Linear(d_model, d_ff)
+        self.W2 = nn.Linear(d_ff, d_model)
 
     def forward(self, x):
-        Q = self.W_q(x)
-        K = self.W_k(x)
-        V = self.W_v(x)
-        
-        output, attn_weights = self.scaled_dot_product(Q, K, V)
-        return output, attn_weights
+        # x: [seq_len, d_model]
+        x = self.W1(x)           # [seq_len, 2048]
+        x = F.relu(x)            # 음수 제거 (비선형)
+        x = self.W2(x)           # [seq_len, 512]
+        return x
 
+class EncoderLayer(nn.Module):
+    def __init__(self, d_model=512, h=8, d_ff=2048):
+        super().__init__()
+        self.mha = MultiHeadAttention(d_model, h)
+        self.ffn = FeedForward(d_model, d_ff)
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+
+    def forward(self, x, mask=False):
+        # 1) Multi-Head Attention -> Add & Norm
+        attn_out, _ = self.mha(x, x, x, mask)
+        x = self.norm1(x + attn_out)
+
+        # 2) FeedForward -> Add & Norm
+        ffn_out = self.ffn(x)
+        x = self.norm2(x + ffn_out)
+
+        return x
+
+class Encoder(nn.Module):
+    def __init__(self, vocab_size, d_model=512, h=8, d_ff=2048, N=6):
+        super().__init__()
+        self.embedding = Embedding(vocab_size, d_model)
+        self.positional_encoding = PositionalEncoding(d_model)
+        self.layers = nn.ModuleList([EncoderLayer(d_model, h, d_ff) for _ in range(N)])
+
+    def forward(self, x, mask=False):
+        x = self.embedding(x)           # 토큰 -> 벡터
+        x = self.positional_encoding(x) # 위치 정보 추가
+        for layer in self.layers:       # EncoderLayer 6번 순차 통과
+            x = layer(x, mask)
+        return x
+    
+class DecoderLayer(nn.Module):
+    def __init__(self, d_model=512, h=8, d_ff=2048):
+        super().__init__()
+        self.masked_mha = MultiHeadAttention(d_model, h)
+        self.cross_mha = MultiHeadAttention(d_model, h)
+        self.ffn = FeedForward(d_model, d_ff)
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.norm3 = nn.LayerNorm(d_model)
+
+    def forward(self, x, encoder_output, mask=True):
+        # 1) Masked MHA -> Add & Norm
+        attn_out, _ = self.masked_mha(x, x, x, mask)
+        x = self.norm1(x + attn_out)
+
+        # 2) Cross MHA (Q: 디코더, K/V: 인코더) -> Add & Norm
+        attn_out, _ = self.cross_mha(x, encoder_output, encoder_output, mask=False)
+        x = self.norm2(x + attn_out)
+
+        # 3) FeedForward -> Add & Norm
+        ffn_out = self.ffn(x)
+        x = self.norm3(x + ffn_out)
+
+        return x
+
+
+class Decoder(nn.Module):
+    def __init__(self, vocab_size, d_model=512, h=8, d_ff=2048, N=6):
+        super().__init__()
+        self.embedding = Embedding(vocab_size, d_model)
+        self.positional_encoding = PositionalEncoding(d_model)
+        self.layers = nn.ModuleList([DecoderLayer(d_model, h, d_ff) for _ in range(N)])
+
+    def forward(self, x, encoder_output):
+        x = self.embedding(x)
+        x = self.positional_encoding(x)
+        for layer in self.layers:
+            x = layer(x, encoder_output)
+        return x
+    
 # 사용
 sentence = "The cat said we can do everything"
 tokens = sentence.split()   #단어 별로 나누기
