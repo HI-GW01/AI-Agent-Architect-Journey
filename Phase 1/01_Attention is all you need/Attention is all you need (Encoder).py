@@ -77,7 +77,9 @@ class MultiHeadAttention(nn.Module):
         self.attention = ScaledDotProductAttention()
 
     def forward(self, query, key, value, mask=False):
-        seq_len = query.size(0)
+        q_len = query.size(0)
+        k_len = key.size(0)
+        v_len = value.size(0)
 
         # 1) 투영: [seq, 512]
         Q = self.W_q(query)
@@ -85,20 +87,20 @@ class MultiHeadAttention(nn.Module):
         V = self.W_v(value)
 
         # 2) 헤드로 split: [seq, 512] -> [seq, h, d_k] -> [h, seq, d_k]
-        Q = Q.view(seq_len, self.h, self.d_k).permute(1, 0, 2)
-        K = K.view(seq_len, self.h, self.d_k).permute(1, 0, 2)
-        V = V.view(seq_len, self.h, self.d_k).permute(1, 0, 2)
+        Q = Q.view(q_len, self.h, self.d_k).permute(1, 0, 2)
+        K = K.view(k_len, self.h, self.d_k).permute(1, 0, 2)
+        V = V.view(v_len, self.h, self.d_k).permute(1, 0, 2)
 
         # 3) 마스크 체크 시: 미래 위치(상삼각)를 막는 마스크 생성
         causal_mask = None
         if mask:
-            causal_mask = torch.triu(torch.ones(seq_len, seq_len), diagonal=1).bool()
+            causal_mask = torch.triu(torch.ones(q_len, k_len), diagonal=1).bool()
 
         # 4) attention: [h, seq, d_k]
         out, attn_weights = self.attention(Q, K, V, causal_mask)
 
         # 5) concat: [h, seq, d_k] -> [seq, h, d_k] -> [seq, 512]
-        out = out.permute(1, 0, 2).reshape(seq_len, self.h * self.d_k)
+        out = out.permute(1, 0, 2).reshape(q_len, self.h * self.d_k)
 
         # 6) 최종 투영 W_o
         out = self.W_o(out)
@@ -190,23 +192,33 @@ class Decoder(nn.Module):
             x = layer(x, encoder_output)
         return x
     
-# 사용
-sentence = "The cat said we can do everything"
-tokens = sentence.split()   #단어 별로 나누기
+class OutputLayer(nn.Module):
+    def __init__(self, d_model=512, vocab_size=37000):
+        super().__init__()
+        self.linear = nn.Linear(d_model, vocab_size)  # 512 -> vocab_size
 
+    def forward(self, x):
+        # x: [seq_len, d_model]
+        logits = self.linear(x)            # [seq_len, vocab_size]  위치마다 단어별 점수
+        probs = F.softmax(logits, dim=-1)  # [seq_len, vocab_size]  위치마다 확률분포
+        return probs
+    
+class Transformer(nn.Module):
+    def __init__(self, src_vocab_size, tgt_vocab_size, d_model=512, h=8, d_ff=2048, N=6):
+        super().__init__()
+        self.encoder = Encoder(src_vocab_size, d_model, h, d_ff, N)
+        self.decoder = Decoder(tgt_vocab_size, d_model, h, d_ff, N)
+        self.output_layer = OutputLayer(d_model, tgt_vocab_size)
 
-vocab = {word: idx for idx, word in enumerate(set(tokens))}
-token_ids = torch.tensor([vocab[word] for word in tokens])
+    def forward(self, src, tgt):
+        # 1) src -> 인코더 (내부에서 embedding + PE + EncoderLayer x6 -> encoder_output)
+        encoder_output = self.encoder(src)
 
-embed_layer = Embedding(vocab_size=len(vocab))
-pe_layer = PositionalEncoding()
+        # 2) tgt -> 디코더 (내부에서 미래 마스킹 + cross-attention + DecoderLayer x6)
+        decoder_output = self.decoder(tgt, encoder_output)
 
-embedded = embed_layer(token_ids)         # [5, 512] 단어별로 임베딩
-pe_output = pe_layer(embedded)               # [5, 512] 포지션 임베딩
-
-attention = ScaledDotProductAttention()   # 스케일드 내적 어텐션 객체 선언
-output, attn_weights = attention(pe_output)             # 쿼리, 키, 벨류 만듬. 
-
-print("Output shape:", output.shape)  # [5, 512]
-print("attn_weights:", attn_weights.shape)  # [5, 5]
-
+        # 3) 출력부 -> 위치별 확률분포
+        out = self.output_layer(decoder_output)
+        return out
+    
+    
