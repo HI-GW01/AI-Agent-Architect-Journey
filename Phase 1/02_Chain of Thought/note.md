@@ -65,4 +65,4 @@
 > teacher의 추론 패턴을 물려받았다면, 크기가 작아도 CoT 효과가 살아있지 않을까?
 > → "100B 창발" 통념이 증류 모델에서는 깨질 것이다 = 이번 실험의 핵심 가설.
 
-(실험 설계·결과는 [`README.md`](README.md), 코드는 [`cot_experiment.py`](cot_experiment.py))
+(실험 설계·결과는 [`README.md`](README.md), 코드는 [`CoT_test.py`](CoT_test.py))
