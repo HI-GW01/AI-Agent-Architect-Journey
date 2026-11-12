@@ -9,7 +9,7 @@
 
 | Phase | 핵심 질문 | 논문 | 목표 산출물 (Micro-Service) | 상태 |
 |:---:|---|---|---|:---:|
-| **1. 추론 엔진의 설계자** | 프롬프트 구조만으로 AI의 사고를 통제할 수 있는가? | Attention ✅ · CoT ⬜ · ReAct ⬜ | 텍스트 → `분석-판단-실행 가이드`를 출력하는 **전략적 업무 분류 에이전트** | 🔨 진행중 |
+| **1. 추론 엔진의 설계자** | 프롬프트 구조만으로 AI의 사고를 통제할 수 있는가? | Attention ✅ · CoT ✅ · ReAct ⬜ | 텍스트 → `분석-판단-실행 가이드`를 출력하는 **전략적 업무 분류 에이전트** | 🔨 진행중 |
 | **2. 외부 데이터·도구의 지휘자** | 할루시네이션을 없애고 외부 DB/API를 팔다리처럼 붙일 수 있는가? | RAG ⬜ · Toolformer ⬜ · Generative Agents ⬜ | 특정 도메인 문서를 이해하고 답하는 **커스텀 지식 에이전트** | ⬜ 예정 |
 | **3. 품질 최적화 아키텍트** | 사람 검수 없이 에이전트가 스스로 결과물을 고치게 만들 수 있는가? | Reflexion ⬜ · Self-Instruct ⬜ | 초안→자가비판→퇴고를 거치는 **자동 콘텐츠 정제 파이프라인** | ⬜ 예정 |
 | **4. 멀티 에이전트 조직의 CEO** | 큰 프로젝트를 쪼개 에이전트 팀으로 협업시킬 수 있는가? | MetaGPT ⬜ · ChatDev ⬜ | 아이디어 한 줄 → 시장조사·기획서·프로토타입까지 내는 **가상 AI 전략팀** | ⬜ 예정 |
@@ -23,8 +23,8 @@
 ### Phase 1 — 추론 엔진의 설계자
 > **목표 상태:** "거대 모델에 의존하지 않고, 프롬프트 구조만으로 AI의 사고 과정을 통제하여 복잡한 비즈니스 의사결정 로직을 설계할 수 있다."
 
-- **Attention Is All You Need** — AI가 문장에서 무엇에 '집중'하는지의 원리 → [`상세 보기`](./phase1-reasoning-engine/01-attention-is-all-you-need)
-- **Chain-of-Thought** — "차근차근 생각하라"로 정답률을 높이는 사고법
+- **Attention Is All You Need** — AI가 문장에서 무엇에 '집중'하는지의 원리 → [`상세 보기`](./Phase%201/01_Attention%20is%20all%20you%20need)
+- **Chain-of-Thought** — "차근차근 생각하라"로 정답률을 높이는 사고법 → [`상세 보기`](./Phase%201/02_Chain%20of%20Thought) (4개 모델 400회 호출 재현 실험, 평가셋·채점기 오류 카탈로그 포함)
 - **ReAct** — 생각 → 행동 → 관찰 → 재사고 루프 (에이전트의 뼈대)
 
 ### Phase 2 — 외부 데이터·도구의 지휘자
@@ -73,9 +73,18 @@
 ---
 
 ## 🗂️ 레포 구조
-├── README.md                          # 전체 로드맵·진행 현황 (현재 문서)
-└── phase1-reasoning-engine/
-└── 01-attention-is-all-you-need/
-├── README.md                  # 논문 정리 + 산업공학적 인사이트
-├── notes.md                   # 백지 상태에서 직접 쓴 구조 설명
-└── encoder.py                 # 인코더 구현 코드
+```
+├── README.md                                   # 전체 로드맵·진행 현황 (현재 문서)
+└── Phase 1/
+    ├── 01_Attention is all you need/
+    │   ├── README.md                           # 논문 정리 + 산업공학적 인사이트
+    │   ├── Notes(Attention is all you need).md # 백지 상태에서 직접 쓴 구조 설명
+    │   └── Attention is all you need (Encoder).py  # 인코더 구현 코드
+    └── 02_Chain of Thought/
+        ├── README.md                           # 실험 설계·결과·오류 카탈로그
+        ├── note.md                             # 논문 정독 백지 노트
+        ├── CoT_test.py                         # 4모델 × 2조건 × 50문항 실험 코드
+        ├── rescore.py                          # API 재호출 없이 재채점
+        ├── cot_results.csv                     # 원시 결과 400행 (raw_output 포함)
+        └── cot_results_rescored.csv            # 재채점 결과 + 오류 유형
+```

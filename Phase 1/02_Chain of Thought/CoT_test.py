@@ -16,7 +16,7 @@ CoT 실험 — Direct(답만) vs Zero-shot CoT, 모델 4개 (크기 그라데이
 [실행]
 1) pip install anthropic google-genai
 2) 아래 두 API_KEY 채우기 (이전에 코드에 박혀 있던 키는 폐기하고 새로 발급할 것).
-3) python cot_experiment.py
+3) python CoT_test.py   (저장된 결과 재채점만: python rescore.py)
 """
 
 import re
@@ -171,22 +171,34 @@ def call_gemini(prompt, model):
 DISPATCH = {"claude" : call_claude, "gemini": call_gemini}
 
 # ============================================================
-# 4. 답 추출 — "Answer:" 또는 "정답:" 뒤 숫자, 없으면 마지막 숫자
+# 4. 답 추출 — \boxed{} 우선, 다음 "Answer:"/"정답:" 뒤 숫자, 없으면 마지막 숫자
+#
+#  [v2 수정] v1은 정수만 읽어 두 방향으로 오채점했다.
+#   - \boxed{7.00} → 0 으로 추출 (맞은 답을 오답 처리, flash CoT #34)
+#   - "Answer: 1.5" → 1 로 절삭 (틀린 답을 정답 처리, Direct #2 3건)
+#  이미 저장된 결과는 rescore.py 로 API 재호출 없이 재채점한다.
 # ============================================================
+NUM = r"-?[\d,]*\.?\d+"
+
+
+def _to_number(s):
+    s = s.replace(",", "")
+    try:
+        v = float(s)
+    except ValueError:
+        return None
+    return int(v) if v == int(v) else v
+
+
 def extract_answer(text):
-    hits = re.findall(r"(?:정답|answer)\s*[:：]?\s*(-?[\d,]+)", text, re.IGNORECASE)
+    boxed = re.findall(r"\\boxed\{\s*\\?\$?\s*(" + NUM + r")\s*\}", text)
+    if boxed:
+        return _to_number(boxed[-1])
+    hits = re.findall(r"(?:정답|answer)\s*[:：]?\s*\$?\s*(" + NUM + r")", text, re.IGNORECASE)
     if hits:
-        try:
-            return int(hits[-1].replace(",", ""))
-        except ValueError:
-            pass
-    nums = re.findall(r"-?\d[\d,]*", text)
-    if nums:
-        try:
-            return int(nums[-1].replace(",", ""))
-        except ValueError:
-            return None
-    return None
+        return _to_number(hits[-1])
+    nums = re.findall(r"-?\d[\d,]*(?:\.\d+)?", text)
+    return _to_number(nums[-1]) if nums else None
 
 # ============================================================
 # 5. 실험 실행 — 4모델 × 2조건 × N문제
@@ -280,7 +292,7 @@ def summarize(rows):
                   f"pred={r['pred']} / gold={r['gold']}")
 
     # CSV 저장
-    out = "cot_results_v2.csv"
+    out = "cot_results.csv"
     with open(out, "w", newline="", encoding="utf-8-sig") as f:
         w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
         w.writeheader()
